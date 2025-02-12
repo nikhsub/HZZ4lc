@@ -13,7 +13,7 @@ parser = argparse.ArgumentParser("Creating labels and seeds")
 parser.add_argument("-d", "--data", default="", help="Data file")
 parser.add_argument("-st", "--save_tag", default="", help="Save tag for data")
 parser.add_argument("-s", "--start", default=0, help="Evt # to start from")
-parser.add_argument("-e", "--end", default=-1, help="Evt # to end with")
+parser.add_argument("-e", "--end", default=3000, help="Evt # to end with")
 args = parser.parse_args()
 
 trk_features = ['trk_eta', 'trk_phi', 'trk_ip2d', 'trk_ip3d', 'trk_ip2dsig', 'trk_ip3dsig', 'trk_p', 'trk_pt', 
@@ -25,6 +25,7 @@ with uproot.open(args.data) as f:
     datatree = f['tree']
 
 num_evts = datatree.num_entries
+print("NUMEVTS", num_evts)
 
 # Preload arrays for all events for faster access in loops
 trk_data = {feat: datatree[feat].array() for feat in trk_features}
@@ -79,7 +80,7 @@ def create_dataobj(trk_data, sig_ind_array, sig_flag_array, bkg_flag_array, bkg_
         )
         evt_objects.append(evt_data)
 
-        return evt_objects
+    return evt_objects
 
 print("Creating data objects...")
 evt_data = create_dataobj(trk_data, sig_ind_array, sig_flag_array, bkg_flag_array, bkg_ind_array,
