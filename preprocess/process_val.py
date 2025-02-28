@@ -14,6 +14,7 @@ parser.add_argument("-d", "--data", default="", help="Data file")
 parser.add_argument("-st", "--save_tag", default="", help="Save tag for data")
 parser.add_argument("-s", "--start", default=0, help="Evt # to start from")
 parser.add_argument("-e", "--end", default=3000, help="Evt # to end with")
+parser.add_argument("-t", "--test", default=False, action="store_true", help="Creating test dataset?")
 args = parser.parse_args()
 
 trk_features = ['trk_eta', 'trk_phi', 'trk_ip2d', 'trk_ip3d', 'trk_ip2dsig', 'trk_ip3dsig', 'trk_p', 'trk_pt', 
@@ -64,6 +65,10 @@ def create_dataobj(trk_data, sig_ind_array, sig_flag_array, bkg_flag_array, bkg_
 
         # Adjust valid indices for masking
         evtsiginds = [np.where(valid_indices == ind)[0][0] for ind in evtsiginds if ind in valid_indices]
+
+        if(not args.test):
+            if(len(evtsiginds) < 3) : continue
+
         evtbkginds = [np.where(valid_indices == ind)[0][0] for ind in evtbkginds if ind in valid_indices]
         #seeds      = [np.where(valid_indices == ind)[0][0] for ind in seeds if ind in valid_indices]
         evtsvinds  = [np.where(valid_indices == ind)[0][0] for ind in evtsvinds if ind in valid_indices]

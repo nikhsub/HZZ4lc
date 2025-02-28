@@ -1,6 +1,5 @@
 import warnings
 warnings.filterwarnings("ignore")
-
 import argparse
 import uproot
 import numpy as np
@@ -31,6 +30,33 @@ sig_flag_array = datatree['sig_flag'].array()
 bkg_flag_array = datatree['bkg_flag'].array()
 bkg_ind_array = datatree['bkg_ind'].array()
 
+def compute_deltaR_matrix(eta, phi):
+    """Computes the ΔR matrix for a given event."""
+    eta = np.array(eta)[:, np.newaxis]  # Shape (N, 1)
+    phi = np.array(phi)[:, np.newaxis]  # Shape (N, 1)
+
+    delta_eta = eta - eta.T  # Broadcast subtraction (N, N)
+    delta_phi = np.arctan2(np.sin(phi - phi.T), np.cos(phi - phi.T))  # Handles periodicity
+    deltaR_matrix = np.sqrt(delta_eta**2 + delta_phi**2)  # Element-wise sqrt
+
+    np.fill_diagonal(deltaR_matrix, np.inf)  # Avoid self-connections
+
+    return deltaR_matrix
+
+def compute_deltaR_threshold(deltaR_matrix, signal_indices):
+
+    signal_pairs = [(i, j) for i in signal_indices for j in signal_indices if i < j]
+    signal_distances = [deltaR_matrix[i, j] for i, j in signal_pairs]
+
+    return np.mean(signal_distances) if signal_distances else None
+
+def create_edge_index(deltaR_matrix, threshold):
+    """Returns edge index tensor for graph connectivity based on ΔR threshold."""
+    row, col = np.where(deltaR_matrix < threshold)  # Get valid edges
+    edge_index = np.vstack((row, col))  # Shape (2, E)
+    
+    return torch.tensor(edge_index, dtype=torch.int64)
+
 def create_event_graphs(trk_data, sig_ind_array, sig_flag_array, bkg_flag_array, bkg_ind_array, trk_features, nevts=3):
     evt_graphs = []
 
@@ -56,22 +82,23 @@ def create_event_graphs(trk_data, sig_ind_array, sig_flag_array, bkg_flag_array,
         evtsiginds = [np.where(valid_indices == ind)[0][0] for ind in set(sig_ind_array[evt]) if ind in valid_indices]
         evtbkginds = [np.where(valid_indices == ind)[0][0] for ind in set(bkg_ind_array[evt]) if ind in valid_indices]
 
+        # Filter events with at least 3 signal indices
+        if len(evtsiginds) < 3:
+            continue  # Skip this event
+
         labels = np.zeros(len(fullfeatmat), dtype=np.float32)
         labels[evtsiginds] = 1  # Label signal as 1
 
+        eta = evt_features['trk_eta'][nan_mask]
+        phi = evt_features['trk_phi'][nan_mask]
+
+        deltaR_matrix = compute_deltaR_matrix(eta, phi)
+
+        deltaR_thres = compute_deltaR_threshold(deltaR_matrix, evtsiginds) 
+
+        edge_index = create_edge_index(deltaR_matrix, deltaR_thres)
+
         # Generate random edges
-        num_nodes = fullfeatmat.shape[0]
-        if num_nodes < 2:  # Skip events with less than 2 nodes
-            continue
-
-        max_edges = num_nodes * (num_nodes - 1) // 2
-        num_edges = max_edges // 50  # Use a fraction of possible edges
-
-        source = np.random.randint(0, num_nodes, num_edges)
-        target = np.random.randint(0, num_nodes, num_edges)
-
-        edge_index = torch.tensor(np.vstack([source, target]), dtype=torch.int64)
-
         hadron_weight = 1
 
         # Create the graph

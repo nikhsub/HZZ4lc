@@ -2,8 +2,8 @@
 
 # Directory paths
 #INPUT_DIR="/store/group/lpcljm/nvenkata/BTVH/toprocfiles/test"    # Set your input directory containing .root files
-INPUT_DIR="/uscms/home/nvenkata/nobackup/higgs+c/preprocess/toproc"
-OUTPUT_DIR="/uscms/home/nvenkata/nobackup/higgs+c/ML_scripts/files/validation/hplusc_val_1102"  # Set your output directory for .pkl files
+INPUT_DIR="/uscms/home/nvenkata/nobackup/higgs+c/preprocess/toproc_val"
+OUTPUT_DIR="/uscms/home/nvenkata/nobackup/higgs+c/ML_scripts/files/validation/hplusc_val_1702"  # Set your output directory for .pkl files
 #EOS_PREFIX="root://cmseos.fnal.gov/"
 EOS_PREFIX=""
 

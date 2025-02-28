@@ -25,6 +25,33 @@ from sklearn.metrics import roc_curve, auc, precision_recall_curve
 import optuna
 from functools import partial
 
+def target_eff_loss(preds, labels, target_tpr=0.7, scale=0.1):
+    preds = preds.view(-1)  # Shape [N]
+    labels = labels.view(-1)  # Shape [N]
+
+    sorted_indices = torch.argsort(preds, descending=True)
+    sorted_preds = preds[sorted_indices]
+    sorted_labels = labels[sorted_indices]
+
+    # Cumulative sum for signal and background counts
+    cumsum_labels = torch.cumsum(sorted_labels, dim=0)
+    total_signal = cumsum_labels[-1]
+    total_background = len(labels) - total_signal
+
+    # Find threshold index for target TPR
+    target_index = torch.argmax((cumsum_labels >= target_tpr * total_signal).to(torch.int64))
+    threshold = sorted_preds[target_index]
+
+    # Calculate FPR and Precision at this threshold
+    tp = cumsum_labels[target_index]
+    fp = (target_index + 1) - tp
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    fpr = fp / total_background if total_background > 0 else 0
+    bg_rejection = 1 - fpr
+
+    loss = -scale*(precision+0.1*bg_rejection)
+    return loss
+
 def class_weighted_bce(preds, labels, pos_weight=5.0, neg_weight=1.0):
     """Class-weighted binary cross-entropy loss"""
     pos_weight = torch.tensor(pos_weight, device=preds.device)
@@ -65,6 +92,7 @@ def train(model, train_loader, optimizer, device, epoch, pos, neg, bce_loss=True
     total_loss=0
     total_node_loss = 0
     total_cont_loss = 0
+    total_eff_loss  = 0
 
     for data in tqdm(train_loader, desc="Training", unit="Batch"):
         data = data.to(device)
@@ -75,6 +103,7 @@ def train(model, train_loader, optimizer, device, epoch, pos, neg, bce_loss=True
         
         node_embeds1, preds1 = model(data.x, data.edge_index)
         node_loss = class_weighted_bce(preds1, data.y.float().unsqueeze(1), pos_weight=pos, neg_weight=neg)*batch_had_weight
+        eff_loss = target_eff_loss(preds1, data.y.float().unsqueeze(1), target_tpr=0.70, scale=0.1)
 
         if bce_loss:
             cont_loss = torch.tensor(0.0, device=device)
@@ -85,7 +114,7 @@ def train(model, train_loader, optimizer, device, epoch, pos, neg, bce_loss=True
 
         #batch_had_weight = data.had_weight[data.batch].mean().to(device)
 
-        loss = (cont_loss * 0.05) + node_loss
+        loss = (cont_loss * 0.05) + node_loss + eff_loss
 
         loss.backward()
         optimizer.step()
@@ -94,13 +123,15 @@ def train(model, train_loader, optimizer, device, epoch, pos, neg, bce_loss=True
         total_loss      += loss.item()
         total_node_loss += node_loss.item()
         total_cont_loss += cont_loss.item()
+        total_eff_loss  += eff_loss.item()
 
     avg_loss = total_loss / len(train_loader)
     avg_node_loss = total_node_loss / len(train_loader)
     avg_cont_loss = total_cont_loss / len(train_loader)
+    avg_eff_loss  = total_eff_loss / len(train_loader)
 
     #print(f"No seed hadrons: {nosigseeds}")
-    return avg_loss, avg_node_loss, avg_cont_loss
+    return avg_loss, avg_node_loss, avg_cont_loss, avg_eff_loss
 
 
 def validate(model, val_graphs, device, epoch, k=6, target_sigeff=0.70):
@@ -154,9 +185,9 @@ def objective(trial, train_loader, val_loader, device, sigeff=0.70):
     num_heads = trial.suggest_categorical("num_heads", [2, 4, 8, 10])
     dropout_rate = trial.suggest_uniform("dropout", 0.0, 0.5)
     learning_rate = trial.suggest_loguniform("lr", 1e-5, 1e-3)
-    pos_weight = trial.suggest_uniform("pos_weight", 1.0, 10.0)
-    neg_weight = trial.suggest_uniform("neg_weight", 1.0, 10.0)
-    k = trial.suggest_int("k", 5.0, 12.0)
+    pos_weight = trial.suggest_uniform("pos_weight", 1.0, 50.0)
+    neg_weight = trial.suggest_uniform("neg_weight", 1.0, 5.0)
+    k = trial.suggest_int("k", 6.0, 14.0)
 
     # Initialize model, optimizer, and loss function
     model = GNNModel(indim=len(trk_features), outdim=hidden_dim, heads=num_heads, dropout=dropout_rate).to(device)
@@ -166,10 +197,10 @@ def objective(trial, train_loader, val_loader, device, sigeff=0.70):
     patience_counter = 0
 
     for epoch in range(30):  # Early stopping after 20 epochs
-        train_loss, _, _ = train(model, train_loader, optimizer, device, epoch, pos_weight, neg_weight)
+        train_loss, _, _, _ = train(model, train_loader, optimizer, device, epoch, pos_weight, neg_weight)
         _,_,_,prec, bg_rej = validate(model, val_loader, device, epoch, k=k, target_sigeff=sigeff)
 
-        metric = prec + bg_rej
+        metric = prec
 
         if metric > best_metric:
             best_metric = metric
@@ -217,7 +248,7 @@ if __name__ == "__main__":
     
     trk_features = ['trk_eta', 'trk_phi', 'trk_ip2d', 'trk_ip3d', 'trk_ip2dsig', 'trk_ip3dsig', 'trk_p', 'trk_pt', 'trk_nValid', 'trk_nValidPixel', 'trk_nValidStrip', 'trk_charge']
     
-    batchsize = 500
+    batchsize = 250
     
     #LOADING DATA
     train_hads = []
@@ -237,7 +268,7 @@ if __name__ == "__main__":
             val_evts = pickle.load(f)
     
     train_hads = train_hads[:] #Control number of input samples here - see array splicing for more
-    val_evts   = val_evts[0:1500]
+    #val_evts   = val_evts[0:1500]
     
     train_len = int(1 * len(train_hads))
     train_data, test_data = random_split(train_hads, [train_len, len(train_hads) - train_len])
@@ -266,9 +297,9 @@ if __name__ == "__main__":
     best_model_path = "best_hyperopt_model_"+args.modeltag+".pth"  # Path to save the best model
 
     for epoch in range(int(args.epochs)):
-        train_loss, _, _ = train(model, train_loader, optimizer, device, epoch, study.best_params["pos_weight"], study.best_params["neg_weight"])
+        train_loss, _, _, _ = train(model, train_loader, optimizer, device, epoch, study.best_params["pos_weight"], study.best_params["neg_weight"])
         _,_,_,prec, bg_rej = validate(model, val_evts, device, epoch, k=study.best_params["k"], target_sigeff=float(args.sigeff))
-        metric = prec+bg_rej
+        metric = prec
         print(f"Epoch {epoch}: Train Loss = {train_loss:.4f}, Metric = {metric:.4f}")
 
         if metric > best_metric:

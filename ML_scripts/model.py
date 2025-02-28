@@ -29,7 +29,8 @@ class GNNModel(torch.nn.Module):
         self.drop1 = nn.Dropout(p=dropout)
         self.drop2 = nn.Dropout(p=dropout)
 
-        catout = outdim + outdim*2
+        #catout = outdim + outdim*2
+        catout = outdim*2
 
         self.node_pred = nn.Sequential(
             nn.Linear(catout, catout//2),
@@ -52,21 +53,23 @@ class GNNModel(torch.nn.Module):
         x = self.bn0(x)
         x = F.leaky_relu(x)
 
-        x1 = self.gcn1(x, edge_index)
-        x1 = self.gat1(x1, edge_index)
-        x1 = self.bn1(x1)
-        x1 = F.leaky_relu(x1)
-        x1 = self.drop1(x1)
+        #x1 = self.gcn1(x, edge_index)
+        #x1 = self.gat1(x1, edge_index)
+        #x1 = self.bn1(x1)
+        #x1 = F.leaky_relu(x1)
+        #x1 = self.drop1(x1)
 
-        skip1 = x + x1
+        #skip1 = x + x1
 
-        x2 = self.gcn2(skip1, edge_index)
-        x2 = self.gat2(x2, edge_index)
-        x2 = self.bn2(x2)
-        x2 = F.leaky_relu(x2)
-        x2 = self.drop1(x2)
+        #x2 = self.gcn2(skip1, edge_index)
+        #x2 = self.gat2(x2, edge_index)
+        #x2 = self.bn2(x2)
+        #x2 = F.leaky_relu(x2)
+        #x2 = self.drop1(x2)
 
-        xf = torch.cat([skip1, x2], dim=1)
+        #xf = torch.cat([skip1, x2], dim=1)
+
+        xf = x
 
         node_probs = self.node_pred(xf)
 

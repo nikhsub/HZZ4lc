@@ -17,7 +17,7 @@ from sklearn.preprocessing import StandardScaler
 import os
 import torch.nn.functional as F
 import math
-from conmodel import *
+from model import *
 import joblib
 from sklearn.metrics import roc_auc_score
 from torch.optim.lr_scheduler import StepLR
@@ -55,7 +55,7 @@ if args.load_evt != "":
         val_evts = pickle.load(f)
 
 train_hads = train_hads[:] #Control number of input samples here - see array splicing for more
-val_evts   = val_evts[0:1500]
+#val_evts   = val_evts[0:1500]
 
 train_len = int(0.8 * len(train_hads))
 train_data, test_data = random_split(train_hads, [train_len, len(train_hads) - train_len])
@@ -66,8 +66,8 @@ test_loader = DataLoader(test_data, batch_size=batchsize, shuffle=False, pin_mem
 #DEVICE AND MODEL
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-model = GNNModel(indim=len(trk_features), outdim=16, heads=4, dropout=0.354)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.00087) #Was 0.00005
+model = GNNModel(indim=len(trk_features), outdim=16, heads=8, dropout=0.31)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.00094) #Was 0.00005
 #scheduler = StepLR(optimizer, step_size = 20, gamma=0.95)
 
 def class_weighted_bce(preds, labels, pos_weight=5.0, neg_weight=1.0):
@@ -102,7 +102,7 @@ def target_eff_loss(preds, labels, target_tpr=0.7, scale=0.1):
     fpr = fp / total_background if total_background > 0 else 0
     bg_rejection = 1 - fpr
 
-    loss = -scale*(precision+bg_rejection)
+    loss = -scale*(precision+0.1*bg_rejection)
     return loss
 
 
@@ -148,7 +148,7 @@ def train(model, train_loader, optimizer, device, epoch, bce_loss=True):
         batch_had_weight = 1
         
         node_embeds1, preds1 = model(data.x, data.edge_index)
-        node_loss = class_weighted_bce(preds1, data.y.float().unsqueeze(1), pos_weight=9, neg_weight=5)*batch_had_weight
+        node_loss = class_weighted_bce(preds1, data.y.float().unsqueeze(1), pos_weight=30, neg_weight=1)*batch_had_weight
         eff_loss = target_eff_loss(preds1, data.y.float().unsqueeze(1), target_tpr=0.70, scale=0.1)
 
         if bce_loss:
@@ -289,9 +289,9 @@ def validate(model, val_graphs, device, epoch, k=6, target_sigeff=0.70):
     return roc_auc, pr_auc, avg_loss, precision_at_sigeff, bg_rejection_at_sigeff
 
 best_metric = 0
-patience = 5 
+patience = 10
 no_improve = 0
-val_every = 10
+val_every = 5
 
 rolling_bce_loss = []
 stabilization_epochs = 5  # Number of epochs to track for stabilization
@@ -335,7 +335,7 @@ for epoch in range(int(args.epochs)):
         tot_loss, node_loss, cont_loss, eff_loss = train(model, train_loader,  optimizer, device, epoch, bce_loss=False)
 
 
-    bkg_acc, sig_acc, test_loss, test_auc = test(model, test_loader,  device, epoch, k=11, thres=glob_test_thres)
+    bkg_acc, sig_acc, test_loss, test_auc = test(model, test_loader,  device, epoch, k=12, thres=glob_test_thres)
     sum_acc = bkg_acc + sig_acc
 
     val_auc = -1
@@ -347,10 +347,10 @@ for epoch in range(int(args.epochs)):
 
     if (epoch+1) % val_every == 0:
         print(f"Validating at epoch {epoch}...")
-        val_auc, pr_auc, val_loss, prec, bg_rej = validate(model, val_evts, device, epoch, k=11, target_sigeff=0.70)
+        val_auc, pr_auc, val_loss, prec, bg_rej = validate(model, val_evts, device, epoch, k=12, target_sigeff=0.70)
         print(f"Val AUC: {val_auc:.4f}, Val Loss: {val_loss:.4f}") 
 
-        metric = prec + bg_rej
+        metric = prec + 0.1*bg_rej
 
         if metric > best_metric:
             best_metric = metric
