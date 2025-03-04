@@ -6,4 +6,4 @@ INPATH=/eos/uscms$(xrdfsls /store/group/lpcljm/nvenkata/Hplusc/hplusc_1402/HPlus
 #INPATH=/eos/uscms/store/group/lpcljm/nvenkata/BTVH/files
 
 
-python condor_analyze.py -i $INPATH -o 1702_hplusc_3FS -ec 3000
+python condor_analyze.py -i $INPATH -o 0303_hplusc_3FS -ec 3000

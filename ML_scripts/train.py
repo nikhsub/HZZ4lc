@@ -35,7 +35,7 @@ glob_test_thres = 0.5
 
 trk_features = ['trk_eta', 'trk_phi', 'trk_ip2d', 'trk_ip3d', 'trk_ip2dsig', 'trk_ip3dsig', 'trk_p', 'trk_pt', 'trk_nValid', 'trk_nValidPixel', 'trk_nValidStrip', 'trk_charge']
 
-batchsize = 500
+batchsize = 1000
 
 #LOADING DATA
 train_hads = []
@@ -66,8 +66,8 @@ test_loader = DataLoader(test_data, batch_size=batchsize, shuffle=False, pin_mem
 #DEVICE AND MODEL
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-model = GNNModel(indim=len(trk_features), outdim=16, heads=8, dropout=0.31)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.00094) #Was 0.00005
+model = GNNModel(indim=len(trk_features), outdim=64, heads=12, dropout=0.1)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.00001) #Was 0.00005
 #scheduler = StepLR(optimizer, step_size = 20, gamma=0.95)
 
 def class_weighted_bce(preds, labels, pos_weight=5.0, neg_weight=1.0):
@@ -78,7 +78,17 @@ def class_weighted_bce(preds, labels, pos_weight=5.0, neg_weight=1.0):
     bce_loss = F.binary_cross_entropy(preds, labels, weight=weights)
     return bce_loss
 
+def focal_loss(preds, labels, gamma=2.0, alpha=0.80):
+    """Focal loss to emphasize hard-to-classify samples"""
+    loss_fn = torch.nn.BCEWithLogitsLoss(reduction='none')
+    bce_loss = loss_fn(preds, labels)
+    pt = torch.exp(-bce_loss)  # Probability of correct classification
+    focal_weight = (1 - pt) ** gamma
+    loss = alpha * focal_weight * bce_loss
+    return loss.mean()
+
 def target_eff_loss(preds, labels, target_tpr=0.7, scale=0.1):
+    preds = torch.sigmoid(preds)
     preds = preds.view(-1)  # Shape [N]
     labels = labels.view(-1)  # Shape [N]
 
@@ -128,8 +138,16 @@ def shuffle_edge_index(edge_index):
 
     # Combine the original sources with the shuffled targets
     new_edge_index = torch.stack([edge_index[0], shuffled_targets], dim=0)
+    bidirectional_edges = torch.cat([new_edges, new_edges.flip(0)], dim=1)
 
-    return new_edge_index
+    return bidirectional_edges
+
+def compute_class_weights(labels):
+    """Dynamically compute class weights based on dataset distribution."""
+    num_pos = labels.sum().item()
+    num_neg = len(labels) - num_pos
+    pos_weight = num_neg / (num_pos + 1e-8)  # Avoid divide-by-zero
+    return pos_weight
 
 #TRAIN
 def train(model, train_loader, optimizer, device, epoch, bce_loss=True):
@@ -141,21 +159,27 @@ def train(model, train_loader, optimizer, device, epoch, bce_loss=True):
     total_eff_loss  = 0
 
     for data in tqdm(train_loader, desc="Training", unit="Batch"):
-        data = data.to(device)
+        with torch.no_grad(): data= data.to(device)
 
         optimizer.zero_grad()
         num_nodes = data.x.size(0)
         batch_had_weight = 1
         
         node_embeds1, preds1 = model(data.x, data.edge_index)
-        node_loss = class_weighted_bce(preds1, data.y.float().unsqueeze(1), pos_weight=30, neg_weight=1)*batch_had_weight
-        eff_loss = target_eff_loss(preds1, data.y.float().unsqueeze(1), target_tpr=0.70, scale=0.1)
+        #weight = torch.tensor(compute_class_weights(data.y.float().unsqueeze(1)), dtype=torch.float, device=device)
+        #loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=weight)
+        #node_loss = loss_fn(preds1, data.y.float().unsqueeze(1)) * batch_had_weight 
+        
+        #node_loss = class_weighted_bce(preds1, data.y.float().unsqueeze(1), pos_weight=weight, neg_weight=1)*batch_had_weight
+        node_loss = focal_loss(preds1, data.y.float().unsqueeze(1))
+        #eff_loss = target_eff_loss(preds1, data.y.float().unsqueeze(1), target_tpr=0.70, scale=0.1)
+        eff_loss = torch.tensor(0.0, device=device)
 
         if bce_loss:
             cont_loss = torch.tensor(0.0, device=device)
         else:
             edge_index2 = shuffle_edge_index(data.edge_index).to(device)
-            node_embeds2, preds2 = model(data.x, edge_index2)
+            node_embeds2, logits2 = model(data.x, edge_index2)
             cont_loss = contrastive_loss(node_embeds1, node_embeds2)
 
         #batch_had_weight = data.had_weight[data.batch].mean().to(device)
@@ -204,7 +228,8 @@ def test(model, test_loader, device, epoch, k=11, thres=0.5):
             
             edge_index = knn_graph(batch.x, k=k, batch=batch.batch, loop=False, cosine=False, flow="source_to_target").to(device)
 
-            _, preds = model(batch.x, edge_index)
+            _, logits = model(batch.x, edge_index)
+            preds = torch.sigmoid(logits)
 
             all_preds.extend(preds.squeeze().cpu().numpy())
             all_labels.extend(batch.y.cpu().numpy())
@@ -256,7 +281,8 @@ def validate(model, val_graphs, device, epoch, k=6, target_sigeff=0.70):
         with torch.no_grad():
             data = data.to(device)
             edge_index = knn_graph(data.x, k=k, batch=None, loop=False, cosine=False, flow="source_to_target").to(device)
-            _, preds = model(data.x, edge_index)
+            _, logits = model(data.x, edge_index)
+            preds = torch.sigmoid(logits)
             preds = preds.squeeze()
             siginds = data.siginds.cpu().numpy()
             #labels = np.zeros(len(preds))
@@ -291,7 +317,7 @@ def validate(model, val_graphs, device, epoch, k=6, target_sigeff=0.70):
 best_metric = 0
 patience = 10
 no_improve = 0
-val_every = 5
+val_every = 10
 
 rolling_bce_loss = []
 stabilization_epochs = 5  # Number of epochs to track for stabilization

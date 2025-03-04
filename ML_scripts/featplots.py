@@ -21,34 +21,39 @@ args = parser.parse_args()
 
 trk_features = ['trk_eta', 'trk_phi', 'trk_ip2d', 'trk_ip3d', 'trk_ip2dsig', 'trk_ip3dsig', 'trk_p', 'trk_pt', 'trk_nValid', 'trk_nValidPixel', 'trk_nValidStrip', 'trk_charge']
 
-def analyze_with_shap(graphs, model, trk_features):
-    print("Computing SHAP values...")
+def analyze_with_shap(graphs, model, trk_features, sample_size=1000):
+    print("Extracting data...")
 
-    # Extract feature data from graphs
     all_feats = []
     for data in tqdm(graphs):
         all_feats.append(data.x.cpu().numpy())
 
-    all_feats = np.concatenate(all_feats, axis=0)  # Shape: (N_total, num_features)
+    all_feats = np.concatenate(all_feats, axis=0)
 
-    # Create SHAP explainer
-    explainer = shap.Explainer(model)  # Automatically detects XGBoost model
-    shap_values = explainer(all_feats)  # Compute SHAP values
+    # Randomly sample events to speed up SHAP
+    if len(all_feats) > sample_size:
+        subset_indices = np.random.choice(len(all_feats), sample_size, replace=False)
+        all_feats = all_feats[subset_indices]
 
-    # Plot SHAP Summary Plot
+    print("Computing SHAP values (fast mode)...")
+
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(all_feats, check_additivity=False)
+
+    # Plot summary
     plt.figure(figsize=(10, 6))
     shap.summary_plot(shap_values, features=all_feats, feature_names=trk_features, show=False)
-    plt.savefig("shap_summary_plot.png", dpi=300, bbox_inches="tight")
+    plt.savefig("shap_summary_plot_fast.png", dpi=300, bbox_inches="tight")
     plt.close()
+    
+    print("Generating SHAP Dependence Plots...")
 
-    # Plot Feature Dependence Plots
-    for i, feat in enumerate(tqdm(trk_features)):
+    for i, feat in enumerate(trk_features):
         plt.figure(figsize=(8, 6))
-        shap.dependence_plot(i, shap_values.values, all_feats, feature_names=trk_features, show=False)
+        shap.dependence_plot(i, shap_values, all_feats, feature_names=trk_features, show=False)
         plt.savefig(f"shap_dependence_{feat}.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-    print("SHAP analysis completed!")
 
 def plot_feature_vs_xgb_score(graphs, model, track_features, bins_x=50, bins_y=50):
     all_feats = []

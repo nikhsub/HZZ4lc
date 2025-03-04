@@ -70,7 +70,8 @@ def evaluate(graphs, model, device):
         with torch.no_grad():
             data = data.to(device)
             edge_index = knn_graph(data.x, k=12, batch=None, loop=False).to(device)
-            _, preds = model(data.x, edge_index)
+            _, logits = model(data.x, edge_index)
+            preds = torch.sigmoid(logits)
             preds = preds.squeeze().cpu().numpy()
 
             siginds = data.siginds.cpu().numpy()
@@ -109,7 +110,7 @@ def evaluate(graphs, model, device):
     return precision, recall, pr_auc, sv_precision, sv_tpr, fpr, tpr, roc_auc, sv_tpr, sv_fpr #Recall is the same thing as tpr
 
 #model1 = GNNModel(len(trk_features), 16, heads=8, dropout=0.11)  # Adjust input_dim if needed
-model1 = GNNModel(len(trk_features), 16, heads=8, dropout=0.35)
+model1 = GNNModel(len(trk_features), 32, heads=12, dropout=0.2)
 model1.load_state_dict(torch.load(args.model1, map_location=torch.device('cpu')))
 model1.eval()
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -132,7 +133,7 @@ p2, r2, auc2, fpr2, tpr2, roc_auc2 = evaluate_xgb(graphs, model2)
 plt.figure(figsize=(10, 8))
 plt.plot(r1, p1, label=f"{args.tag1} (AUC = {auc1:.2f})", color="red")
 plt.plot(r2, p2, label=f"{args.tag2} (AUC = {auc2:.2f})", color="blue")
-plt.scatter([sv_r1], [sv_p1], color="pink", label=f"IVF Recall={sv_r1:.2f}, Precision={sv_p1:.2f}", zorder=5)
+plt.scatter([sv_r1], [sv_p1], color="black", label=f"IVF Recall={sv_r1:.2f}, Precision={sv_p1:.2f}", zorder=5)
 
 plt.xlabel("Recall(Signal Efficiency)")
 plt.ylabel("Precision")
@@ -146,7 +147,7 @@ plt.close()
 plt.figure(figsize=(10, 8))
 plt.plot(tpr1, fpr1, label=f"{args.tag1} (AUC = {roc_auc1:.2f})", color="red")
 plt.plot(tpr2, fpr2, label=f"{args.tag2} (AUC = {roc_auc2:.2f})", color="blue")
-plt.scatter([sv_tpr1], [sv_fpr1], color="pink", label=f"IVF TPR={sv_tpr1:.2f}, FPR={sv_fpr1:.2f}", zorder=5)
+plt.scatter([sv_tpr1], [sv_fpr1], color="black", label=f"IVF TPR={sv_tpr1:.2f}, FPR={sv_fpr1:.2f}", zorder=5)
 
 plt.xlabel("Signal Efficiency")
 plt.ylabel("Background Mistag")
